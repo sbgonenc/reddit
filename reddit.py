@@ -1,3 +1,4 @@
+import prawcore.exceptions
 from settings import CONFIG_FILE_PATH
 import re
 from praw.models import MoreComments, Subreddit, ListingGenerator
@@ -12,10 +13,23 @@ class RedditContent:
     """
     def __init__(self,
                  max_comment_length=2000, min_comment_length=100, min_comment_score=10,
-                 thread_limit=20, include_nsfw:bool=False, config_file_path:str=None
+                 thread_limit=20, include_nsfw:bool=False, config_file_path:str=None,
+                 sub_limit=100
                  ):
+
+        """
+
+        :param max_comment_length:
+        :param min_comment_length:
+        :param min_comment_score:
+        :param thread_limit:
+        :param include_nsfw:
+        :param config_file_path:
+        :param sub_limit:
+        """
         self.config_file_path = CONFIG_FILE_PATH if config_file_path is None else config_file_path
         self.thread_limit = thread_limit
+        self.sub_limit = sub_limit
         self.include_nsfw = include_nsfw
 
         ### Comment related parameters
@@ -25,7 +39,9 @@ class RedditContent:
 
         ### Parameters to be used
         self.reddit = None
+        self.subs:List[Subreddit]=None
         self.contents = {}
+        self.controlled=False
 
     def process(self,
                 get_popular:bool=True,
@@ -38,32 +54,62 @@ class RedditContent:
         if not self.reddit:
             self.authenticate()
 
-        ## Get query related subreddits if search query is provided
-        ## default is to have popular subreddits
-        if (search_query is None and subreddits is None) or get_popular:
-            print("Getting the popular subreddits.")
-            subs = self.get_popular_subreddits()
+        ## Run process pipeline
+        if subreddits:
+            from time import sleep
+            for sub in subreddits:
+                sleep(2)
+                try:
+                    self.pipe(query=sub, fuzzy=False, exact=True)
+                except prawcore.exceptions.Forbidden as e:
+                    print(f"Could not get the {sub} subreddit due to:\n{e}")
+                    continue
+        elif search_query:
+            self.pipe(query=search_query, fuzzy=fuzzy_search, exact=exact_search)
+        else:## default value -> gets popular subreddits
+            self.pipe(query=None, fuzzy=False, exact=False)
 
-        elif search_query is not None:
-            if fuzzy_search:
-                print(f"Getting {search_query} related subreddits.")
-                subs = self.search_subreddits(search_query)
-            else:
-                print(f"Getting {search_query} subreddit(s).")
-                subs = self.search_subreddits_by_name(search_query, exact=exact_search)
-        elif subreddits is not None:
-            for subred in subreddits:
-                self.process(search_query=subred, exact_search=True, get_popular=False)
-            return 0
+        if not self.controlled:
+            ##control the contents
+            self.control_contents()
 
-        else:
-            raise Exception("Invalid arguments provided. Please provide either search_query or subreddits.")
+    def pipe(self, query, fuzzy, exact):
+        self.get_subs(
+            query=query,
+            exact=exact,
+            fuzzy=fuzzy
+        )
 
         ## Get threads from subreddits
-        self.update_content_subreddits(subs)
+        self.update_content_subreddits()
 
         ##get threads and comments
         self.update_content_threads_comments()
+
+    def get_subs(self,query:AnyStr, exact:bool=False, fuzzy:bool=False):
+        """
+        Calls the methods for popular or query related subreddits
+        :param query:
+        :param exact:
+        :param fuzzy:
+        :return:
+        """
+        ## Get query related subreddits if search query is provided
+        ## default is to have popular subreddits
+
+        if query is None:
+            print("Getting the popular subreddits.")
+            self.subs = self.get_popular_subreddits()
+            return self.subs
+
+        if fuzzy:
+            print(f"Getting {query} related subreddits.")
+            self.subs = self.search_subreddits(query)
+            return self.subs
+
+        print(f"Getting {query} subreddit.")
+        self.subs = self.search_subreddits_by_name(query, exact=exact)
+        return self.subs
 
     def search_subreddits(self, query:str):
         """
@@ -77,6 +123,7 @@ class RedditContent:
         return self.reddit.subreddits.search_by_name(query, exact=exact, include_nsfw=self.include_nsfw)
 
     def get_subreddits(self, subreddits:list|str)->Subreddit:
+        ## https://praw.readthedocs.io/en/stable/code_overview/models/subreddit.html#praw.models.Subreddit
         if isinstance(subreddits, str):
             return self.reddit.subreddit(subreddits)
         return self.reddit.subreddit("+".join(subreddits))
@@ -85,15 +132,15 @@ class RedditContent:
         return self.get_subreddits(subreddits).hot(limit=self.thread_limit)
 
     def get_popular_subreddits(self):
-        return self.reddit.subreddits.popular()
+        return self.reddit.subreddits.popular(limit=self.sub_limit)
 
-    def update_content_subreddits(self, subreddits:List[Subreddit]):
+    def update_content_subreddits(self):
         """
         Populates self.contents with subreddits
         :param subreddits:
         :return:
         """
-        for sub in subreddits:
+        for sub in self.subs:
             r_url = sub.url.split("/")[2]
             self.contents.update({r_url: {
                 "title": sub.title,
@@ -103,13 +150,13 @@ class RedditContent:
                 "contents": []
             }})
 
-    def update_content_threads_comments(self):
+    def update_content_threads_comments(self, subreddit_names:List[str]=None):
         """
         Updates self.contents with threads and comments
         :return:
         """
         ##get display names for the subreddits
-        subreddit_names = [sub["display_name"] for sub in self.contents.values()]
+        subreddit_names = [sub["display_name"] for sub in self.contents.values()] if subreddit_names is None else subreddit_names
         threads_comments = self.get_subreddit_threads(subreddit_names)
         for thread in threads_comments:
             comments = self.get_comments(thread.id)
@@ -118,6 +165,7 @@ class RedditContent:
             self.contents[r_url]["contents"].append({
                 "thread_id": thread.id,
                 "title": thread.title,
+                "num_comments": thread.num_comments,
                 "comments": comments,
                 "is_nsfw": thread.over_18,
                 "upvotes": thread.score,
@@ -125,15 +173,11 @@ class RedditContent:
                 "upvote_ratio": thread.upvote_ratio,
             })
 
-    def get_comments(self, post_id, sort_by="top",
-                     max_comment_length=2000, min_comment_length=100,
-                     min_comment_score=10):
+    def get_comments(self, post_id, sort_by="top"):
         """
         Get comments from a post / thread, filters the comments and returns them
         :param post_id: post id to be submitted
         :param sort_by: after getting the comments, sort them by top, new, controversial, etc.
-        :param max_comment_length:
-        :param min_comment_length:
         :return: a dict of comments --> {text: str, id: str, url: str, author: str, upvotes: int}
         """
         submission = self.reddit.submission(post_id)
@@ -142,14 +186,14 @@ class RedditContent:
 
         comments = []
         for top_level_comment in submission.comments.list():
-            if isinstance(top_level_comment, MoreComments): continue
+            if isinstance(top_level_comment, MoreComments): continue ## TODO: include all comments in the comment tree
             filters = [ ## If any of the filters are true, skip the comment
                 top_level_comment.body in ["[removed]", "[deleted]"],
                 top_level_comment.stickied,
-                len(top_level_comment.body) < min_comment_length,
-                len(top_level_comment.body) > max_comment_length,
+                len(top_level_comment.body) < self.min_comment_length,
+                len(top_level_comment.body) > self.max_comment_length,
                 top_level_comment.author is None,
-                top_level_comment.score < min_comment_score
+                top_level_comment.score < self.min_comment_score
                  ]
             if any(filters): continue
             sanitised_text = self.sanitise_text(top_level_comment.body)
@@ -168,6 +212,25 @@ class RedditContent:
         from authentication import authenticate_reddit, get_reddit_config
         config = get_reddit_config(self.config_file_path)
         self.reddit = authenticate_reddit(config)
+
+    def control_contents(self):
+        """
+        When querying multiple subreddits, sometimes some contents returned empty.
+        Controls the contents of the self.contents
+        :return:
+        """
+        subs_with_no_contents = [
+            subreddit_content["display_name"] for subreddit_url, subreddit_content in self.contents.items()
+            if not subreddit_content["contents"]
+        ]
+
+        self.controlled = True
+
+        ##print(no_contents) ##Debug purposes
+        if subs_with_no_contents:
+            self.update_content_threads_comments(
+                subreddit_names=subs_with_no_contents
+            )
 
     @staticmethod
     def sanitise_text(text:str, no_urls:bool=True, no_special_chars:bool=True, no_emojis:bool=True)->str:

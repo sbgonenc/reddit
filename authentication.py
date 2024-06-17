@@ -38,6 +38,7 @@ def authenticate_reddit(config=None, **kwargs):
             username=username,
             passkey=passkey,
             check_for_async=False,
+            ratelimit_seconds=60, ## manually added ratelimit_seconds
         )
     except ResponseException as e:
         if e.response.status_code == 401:

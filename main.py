@@ -4,22 +4,30 @@ def run_reddit_content(args):
     ## Initiate RedditContent class
     reddit_content = RedditContent(
         thread_limit=args.max_thread,
+        sub_limit=args.max_sub,
         include_nsfw=args.include_nsfw,
         config_file_path=args.config_file_path,
         max_comment_length=args.max_comment_length,
         min_comment_length=args.min_comment_length,
         min_comment_score=args.min_comment_score,
+
     )
     ## authenticates, api calls, gets content
-    reddit_content.process(
-        subreddits=args.subreddit,
-        search_query=args.search_query,
-        get_popular=args.popular,
-        fuzzy_search=args.fuzzy_search
-    )
-    ## write content to file
-    reddit_content.write_contents(args.output_file)
-    print(f"Hurray! Content has been written to {args.output_file}")
+
+    try:
+        reddit_content.process(
+            subreddits=args.subreddit,
+            search_query=args.search_query,
+            get_popular=args.popular,
+            fuzzy_search=args.fuzzy_search
+        )
+    except Exception as e:
+        print(f"Process encountered an error:\n{e}")
+
+    finally:
+        ## write content to file
+        reddit_content.write_contents(args.output_file)
+        print(f"Hurray! Content has been written to {args.output_file}")
 
 
 if __name__ == "__main__":
@@ -28,6 +36,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--subreddit", type=str, nargs="+", default=[], required=False, help="Subreddit(s) to get content from")
     parser.add_argument("--max_thread", type=int, required=False, default=20, help="Maximum number of threads in a subreddit to get content from")
+    parser.add_argument("--max_sub", type=int, required=False, default=100, help="Maximum number of subreddits to get")
     parser.add_argument("--search_query", type=str, required=False, help="Search query to get content from")
     parser.add_argument("--output_file", type=str, required=False, default="reddit_contents.json",help="Output json file to write content to")
     parser.add_argument("--popular", action="store_true", help="Get content from popular subreddits. Without any other arguments, this is the default")
