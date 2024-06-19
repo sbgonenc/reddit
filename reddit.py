@@ -165,6 +165,7 @@ class RedditContent:
             self.contents[r_url]["contents"].append({
                 "thread_id": thread.id,
                 "title": thread.title,
+                "self_text": thread.selftext,
                 "num_comments": thread.num_comments,
                 "comments": comments,
                 "is_nsfw": thread.over_18,
