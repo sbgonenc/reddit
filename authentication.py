@@ -5,7 +5,9 @@ import toml
 
 
 def get_reddit_config(config_file_path):
-    return toml.load(config_file_path)["reddit"]
+    if os.path.exists(config_file_path):
+        return toml.load(config_file_path)["reddit"]
+    return None
 
 
 def authenticate_reddit(config=None, **kwargs):
